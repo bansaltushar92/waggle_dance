@@ -1,0 +1,8 @@
+import numpy as np
+
+THRESHOLD = 50
+ELLIPSE_AXIS = (14,9)
+SKIP_FRAMES = 500
+FRAME_COUNT = 500
+LOWER_WHITE = np.array([0, 0, 110])
+UPPER_WHITE = np.array([255,255, 255])
