@@ -47,8 +47,12 @@ def select_point(event, x, y, flags, param):
     
     """
     global prev
-    if event == cv2.EVENT_LBUTTONUP:
+    global abdomen
+    
+    if prev == None and event == cv2.EVENT_LBUTTONUP:
         prev = (x,y)
+    elif event == cv2.EVENT_LBUTTONUP:
+        abdomen = (x,y)
 
 def find_orient(img_gray, prev_orient):
     """
@@ -120,13 +124,14 @@ def check_zig_zag(track_pos):
             return True
     return False
 
-def tracker(filename, orient):
+def tracker(filename):
     
-    print 'here', filename, orient
-
     sharp_list = []
     track_pos = []
+    orient_list = []
     global prev
+    prev = None
+    global abdomen
     
     cap = cv2.VideoCapture(filename)
     for _ in range(0,SKIP_FRAMES):
@@ -135,15 +140,18 @@ def tracker(filename, orient):
     img = cv2.resize(img, (0,0), fx=0.5, fy=0.5)
     cv2.namedWindow("frame")
     cv2.imshow('frame', img)
-    cv2.setMouseCallback("frame",  select_point)
+    cv2.setMouseCallback("frame",  select_point)    
     cv2.waitKey(0)
+    
+    # Initial orient
+    base = np.array([-1,0])
+    vect = np.array([prev[0]-abdomen[0],prev[1]-abdomen[1]])
+    orient = int(math.degrees(np.arccos(np.dot(base, vect)/(np.linalg.norm(base)*np.linalg.norm(vect)))))
+    if vect[1] > 0:
+        orient = 360-orient    
     
     mask = np.zeros_like(img)
     waggle_mask = np.zeros_like(img)
-
-    height , width , layers =  img.shape
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter('output.avi',fourcc, 30.0, (width,height))
 
     for counter in range(0,FRAME_COUNT):
         ret, img = cap.read()
@@ -161,41 +169,104 @@ def tracker(filename, orient):
             mask[:,:,2] = mask[:,:,2].clip(min=2)
             mask[:,:,2] = mask[:,:,2] - 2
             mask = cv2.line(mask, (prev[0],prev[1]),(new_x,new_y), (0,0,255), 2)    
+            
+            
             prev = (new_x, new_y)
+            
             track_pos.append(prev)
             '''Calculating distance from fixed line segment'''
             dist, map_x, map_y = calc_dist(488,317,490,333,new_x,new_y)
             
-            waggle = check_zig_zag(track_pos)
-            if waggle:
-                img = cv2.circle(img,prev,5,(0,255,0),-1)
             
-    
-        # img = cv2.circle(img,(488, 317),2,(255,0,0),-1)
-        # img = cv2.circle(img,(490, 333),2,(255,0,0),-1)
-        # img = cv2.line(img, (488, 317), (490, 333), (255,0,0), 2)
-        # img = cv2.circle(img,(map_x, map_y),4,(0,255,0),-1)
         img = cv2.add(img, mask)
 
-
         orient, rect_mask = find_orient(img_gray[new_y-40:new_y+40,new_x-40:new_x+40], orient)
-        blanc = np.zeros_like(img)
-        blanc[new_y-40:new_y+40,new_x-40:new_x+40,2] = rect_mask
-        bee_rect = cv2.bitwise_and(img_gray,img_gray, mask= blanc[:,:,2])
+        orient_list.append(orient)
+
+        M = cv2.getRotationMatrix2D((new_x,new_y), orient,1)
+        rows,cols = img_gray.shape
+        rotated_img = cv2.warpAffine(img_gray,M, (cols, rows))
+        bee_rect = rotated_img[new_y-ELLIPSE_AXIS[1]:new_y+ELLIPSE_AXIS[1],new_x:new_x+2*ELLIPSE_AXIS[0]]
 
         laplacian = cv2.Laplacian(bee_rect,cv2.CV_64F)
         mean, sigma = cv2.meanStdDev(laplacian)
         sharp_list.append(np.log(sigma[0])[0])
     
+    cv2.destroyAllWindows()
+    cap.release()
+    return sharp_list, track_pos, orient_list
+
+
+def get_peak_list(orient_list):
+    min_list = []
+    max_list = []
+    for i in range(10,len(orient_list)-10):
+        if max(orient_list[i-10:i+11]) == orient_list[i]:
+            max_list.append(i)
+        elif min(orient_list[i-10:i+11]) == orient_list[i]:
+            min_list.append(i)
+    return min_list, max_list
+
+def compute_max_waggle(max_list, orient_list, waggle_list, convolve_list, threshold):
+    for i in max_list:
+        j = i
+        while j < len(orient_list) and orient_list[i] - orient_list[j] >= 0 and (i == j or np.mean(orient_list[i-1:i+2]) - np.mean(orient_list[i+1:j+1]) <= 10):
+            if convolve_list[i] <= threshold:
+                waggle_list[j] = True
+            j+=1
+        j=i-1
+        while j >= 0 and orient_list[i] - orient_list[j] >= 0 and np.mean(orient_list[i-1:i+2]) - np.mean(orient_list[j:i]) <= 10:
+            if convolve_list[i] <= threshold:
+                waggle_list[j] = True
+            j-=1
+    return waggle_list
+
+def compute_min_waggle(min_list, orient_list, waggle_list, convolve_list, threshold):
+    for i in min_list:
+        j = i
+        while j < len(orient_list) and orient_list[j] - orient_list[i] >= 0 and (i == j or np.mean(orient_list[i+1:j+1]) - np.mean(orient_list[i-1:i+2]) <= 10):
+            if convolve_list[i] <= threshold:
+                waggle_list[j] = True
+            j+=1
+        j=i-1
+        while j >= 0 and orient_list[j] - orient_list[i] >= 0 and np.mean(orient_list[j:i]) - np.mean(orient_list[i-1:i+2]) <= 10:
+            if convolve_list[i] <= threshold:
+                waggle_list[j] = True
+            j-=1
+    return waggle_list
+
+def show_results(filename, waggle_list):
+    cap = cv2.VideoCapture(filename)
+    for _ in range(0,SKIP_FRAMES):
+        ret, img = cap.read()
+
+    height , width =  int(cap.get(4)), int(cap.get(3))
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter('output_'+ filename + '.avi',fourcc, 30.0, (width,height))
+
+    for counter in range(0,FRAME_COUNT):
+        ret, img = cap.read()
+        cv2.putText(img, str(counter),(100,100), FONT, 2,(255,255,255),2,cv2.LINE_AA)
+        if waggle_list[counter] == True:
+            cv2.putText(img, 'WAGGLE',(width-400,100), FONT, 2,(0,0,255),2,cv2.LINE_AA)
         cv2.imshow('img', img)
-        cv2.waitKey(30)
         out.write(img)
-    cv2.waitKey(0)
+        cv2.waitKey(1)
     cv2.destroyAllWindows()
     cap.release()
     out.release()
-    return sharp_list
+
+def compute_waggle(orient_list, sharp_list, filename):
+    waggle_list = [False]*len(orient_list)
+    convolve_sharp_list = np.convolve(sharp_list, CONVOLVE_ARRAY, 'valid')
+    threshold = SHARPNESS_THRESHOLD*(max(convolve_sharp_list)-min(convolve_sharp_list))+min(convolve_sharp_list)
+    min_list, max_list = get_peak_list(orient_list)
+    waggle_list = compute_min_waggle(min_list, orient_list, waggle_list, convolve_sharp_list, threshold)
+    waggle_list = compute_max_waggle(max_list, orient_list, waggle_list, convolve_sharp_list, threshold)
+    show_results(filename, waggle_list)
+
 
 if __name__ == "__main__":
-    tracker(sys.argv[1], int(sys.argv[2]))
+    sharp_list, track_pos, orient_list = tracker(sys.argv[1])
+    compute_waggle(orient_list, sharp_list, sys.argv[1])
     
