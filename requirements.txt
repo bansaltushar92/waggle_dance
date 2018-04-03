@@ -1,2 +1,5 @@
 numpy==1.11.2
 pandas==0.18.1
+scikit-image==0.12.3
+scipy==1.0.0
+sklearn==0.18.1
