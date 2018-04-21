@@ -28,3 +28,7 @@ python train.py -v=video_directory -m=model_file -a=annotation_directory
 -v directory with videos to train. Each video should be less than 20000 frames
 -m pickle file name for saving the model
 -a annotation files. For each video name 'vid.MP4' use name 'vid_annot.csv'
+
+## Human Annotation Software
+
+The software used for performing human annotations was <https://physlets.org/tracker/>
